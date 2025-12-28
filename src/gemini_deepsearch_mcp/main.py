@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from typing import Annotated, Literal
 
 from fastmcp import FastMCP
@@ -13,7 +14,13 @@ from pydantic import Field
 
 from .agent.graph import graph
 from .config import load_config
+from .logging import configure_logging, get_logger
 from .model_selection import resolve_models
+
+# Initialize logging and create logger
+_config = load_config()
+configure_logging(_config.log_level)
+logger = get_logger("deepsearch.main")
 
 # Create MCP server
 mcp = FastMCP("DeepSearch")
@@ -65,6 +72,14 @@ def deep_search(
     Returns:
         A dictionary containing the file path to a JSON file with the answer and sources.
     """
+    start_time = time.time()
+    log = logger.bind(
+        query=query[:50] + "..." if len(query) > 50 else query,
+        effort=effort,
+        preset=model,
+    )
+    log.info("deep_search_started")
+
     # Resolve models with priority: individual > preset > config defaults
     try:
         models = resolve_models(
@@ -74,7 +89,15 @@ def deep_search(
             reflection_model=reflection_model,
             answer_model=answer_model,
         )
+        log.debug(
+            "models_resolved",
+            query_model=models["query_generator_model"],
+            search_model=models["web_search_model"],
+            reflection_model=models["reflection_model"],
+            answer_model=models["answer_model"],
+        )
     except ValueError as e:
+        log.error("model_resolution_failed", error=str(e))
         return {"error": str(e)}
 
     # Load config for effort-based settings
@@ -90,6 +113,12 @@ def deep_search(
     else:  # high effort
         initial_search_query_count = 5
         max_research_loops = 3
+
+    log.info(
+        "research_config",
+        initial_queries=initial_search_query_count,
+        max_loops=max_research_loops,
+    )
 
     # Prepare the input state with the user's query
     input_state = {
@@ -112,8 +141,14 @@ def deep_search(
         }
     }
 
-    # Run the agent graph to process the query in a separate thread to avoid blocking
-    result = graph.invoke(input_state, config)
+    # Run the agent graph to process the query
+    try:
+        log.info("agent_invocation_started")
+        result = graph.invoke(input_state, config)
+        log.info("agent_invocation_completed")
+    except Exception as e:
+        log.exception("agent_invocation_failed", error=str(e))
+        return {"error": f"Research failed: {str(e)}"}
 
     # Extract the final answer and sources from the result
     answer = (
@@ -122,21 +157,30 @@ def deep_search(
     sources = result["sources_gathered"]
 
     # Create filename from first few characters of query (spaces replaced with underscores)
-    sanitized_query = re.sub(r'[^\w\s-]', '', query)[:20]  # Remove special chars, keep first 20 chars
+    sanitized_query = re.sub(r'[^\w\s-]', '', query)[:20]
     filename = re.sub(r'\s+', '_', sanitized_query.strip()) + '.json'
     file_path = os.path.join(tempfile.gettempdir(), filename)
-    
+
     # Write answer and sources to JSON file
     result_data = {"answer": answer, "sources": sources}
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
-    
+
+    duration = time.time() - start_time
+    log.info(
+        "deep_search_completed",
+        duration_seconds=round(duration, 2),
+        sources_count=len(sources),
+        answer_length=len(answer),
+        output_file=file_path,
+    )
+
     return {"file_path": file_path}
 
 
 def main():
     """Main entry point for the MCP server."""
-    sys.stderr.write("Starting MCP stdio server...\n")
+    logger.info("mcp_server_starting", transport="stdio")
     mcp.run(transport="stdio")
 
 
