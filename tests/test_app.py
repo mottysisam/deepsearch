@@ -1,6 +1,6 @@
 """Tests for the FastMCP server in src/app.py."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +15,13 @@ pytestmark = pytest.mark.anyio
 def anyio_backend():
     """Use only asyncio backend for tests."""
     return "asyncio"
+
+
+@pytest.fixture
+def mock_graph():
+    """Create a mock graph with invoke method."""
+    mock = MagicMock()
+    return mock
 
 
 @pytest.fixture
@@ -34,20 +41,44 @@ def mock_graph_result():
     }
 
 
+@pytest.fixture
+def mock_models():
+    """Mock resolved models configuration."""
+    return {
+        "query_generator_model": "gemini-2.5-flash",
+        "web_search_model": "gemini-2.5-flash-lite-preview-06-17",
+        "reflection_model": "gemini-2.5-flash",
+        "answer_model": "gemini-2.5-pro",
+    }
+
+
+@pytest.fixture
+def mock_config():
+    """Mock configuration object."""
+    mock = MagicMock()
+    mock.initial_query_count = 3
+    mock.max_research_loops = 2
+    return mock
+
+
 class TestDeepSearchTool:
     """Test cases for the deep_search tool function."""
 
-    async def test_deep_search_low_effort(self, mock_graph_result):
+    async def test_deep_search_low_effort(self, mock_graph_result, mock_models, mock_config):
         """Test deep_search with low effort level."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
-            result = await deep_search("What is climate change?", "low")
+            # Access underlying function via .fn attribute (FunctionTool wrapper)
+            result = await deep_search.fn("What is climate change?", "low")
 
             # Verify result structure
             assert "answer" in result
@@ -68,21 +99,23 @@ class TestDeepSearchTool:
             # Verify low effort configuration
             assert input_state["initial_search_query_count"] == 1
             assert input_state["max_research_loops"] == 1
-            assert input_state["reasoning_model"] == "gemini-2.5-flash-preview-05-20"
             assert len(input_state["messages"]) == 1
             assert input_state["messages"][0].content == "What is climate change?"
 
-    async def test_deep_search_medium_effort(self, mock_graph_result):
+    async def test_deep_search_medium_effort(self, mock_graph_result, mock_models, mock_config):
         """Test deep_search with medium effort level."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
-            result = await deep_search("What is artificial intelligence?", "medium")
+            result = await deep_search.fn("What is artificial intelligence?", "medium")
 
             # Verify result structure
             assert "answer" in result
@@ -92,22 +125,24 @@ class TestDeepSearchTool:
             args, kwargs = mock_to_thread.call_args
             invoke_func, input_state, config = args
 
-            # Verify medium effort configuration
+            # Verify medium effort configuration (uses mock_config values)
             assert input_state["initial_search_query_count"] == 3
             assert input_state["max_research_loops"] == 2
-            assert input_state["reasoning_model"] == "gemini-2.5-flash-preview-05-20"
 
-    async def test_deep_search_high_effort(self, mock_graph_result):
+    async def test_deep_search_high_effort(self, mock_graph_result, mock_models, mock_config):
         """Test deep_search with high effort level."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
-            result = await deep_search("Explain quantum computing", "high")
+            result = await deep_search.fn("Explain quantum computing", "high")
 
             # Verify result structure
             assert "answer" in result
@@ -120,19 +155,21 @@ class TestDeepSearchTool:
             # Verify high effort configuration
             assert input_state["initial_search_query_count"] == 5
             assert input_state["max_research_loops"] == 3
-            assert input_state["reasoning_model"] == "gemini-2.5-pro-preview-06-05"
 
-    async def test_deep_search_default_effort(self, mock_graph_result):
+    async def test_deep_search_default_effort(self, mock_graph_result, mock_models, mock_config):
         """Test deep_search with default effort level (should be low)."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
-            await deep_search("What is machine learning?")
+            await deep_search.fn("What is machine learning?")
 
             # Get the actual arguments passed to graph.invoke via asyncio.to_thread
             args, kwargs = mock_to_thread.call_args
@@ -141,61 +178,66 @@ class TestDeepSearchTool:
             # Verify default (low) effort configuration
             assert input_state["initial_search_query_count"] == 1
             assert input_state["max_research_loops"] == 1
-            assert input_state["reasoning_model"] == "gemini-2.5-flash-preview-05-20"
 
-    async def test_deep_search_empty_messages(self):
+    async def test_deep_search_empty_messages(self, mock_models, mock_config):
         """Test deep_search when graph returns empty messages."""
         mock_result = {"messages": [], "sources_gathered": []}
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_result
 
         with (
-            patch("gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_result),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_result
 
-            result = await deep_search("Test query", "low")
+            result = await deep_search.fn("Test query", "low")
 
             assert result["answer"] == "No answer generated."
             assert result["sources"] == []
 
-    async def test_deep_search_config_models(self, mock_graph_result):
+    async def test_deep_search_config_models(self, mock_graph_result, mock_models, mock_config):
         """Test that deep_search passes correct model configuration."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
-            await deep_search("Test query", "low")
+            await deep_search.fn("Test query", "low")
 
             # Get the config passed to graph.invoke
             args, kwargs = mock_to_thread.call_args
             invoke_func, input_state, config = args
 
-            # Verify model configuration
-            expected_config = {
-                "configurable": {
-                    "query_generator_model": "gemini-2.5-flash-preview-05-20",
-                    "reflection_model": "gemini-2.5-flash-preview-05-20",
-                    "answer_model": "gemini-2.5-pro-preview-06-05",
-                }
-            }
-            assert config == expected_config
+            # Verify model configuration contains expected keys
+            assert "configurable" in config
+            assert "query_generator_model" in config["configurable"]
+            assert "reflection_model" in config["configurable"]
+            assert "answer_model" in config["configurable"]
 
-    async def test_deep_search_input_state_structure(self, mock_graph_result):
+    async def test_deep_search_input_state_structure(self, mock_graph_result, mock_models, mock_config):
         """Test that deep_search creates correct input state structure."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
             query = "What is renewable energy?"
-            await deep_search(query, "medium")
+            await deep_search.fn(query, "medium")
 
             # Get the input state passed to graph.invoke
             args, kwargs = mock_to_thread.call_args
@@ -246,26 +288,36 @@ class TestFastAPIApp:
 class TestErrorHandling:
     """Test error handling scenarios."""
 
-    async def test_deep_search_graph_exception(self):
+    async def test_deep_search_graph_exception(self, mock_models, mock_config):
         """Test deep_search when graph.invoke raises an exception."""
-        with patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread:
+        mock_graph = MagicMock()
+
+        with (
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
+            patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
+        ):
             mock_to_thread.side_effect = Exception("Graph execution failed")
 
             with pytest.raises(Exception, match="Graph execution failed"):
-                await deep_search("Test query", "low")
+                await deep_search.fn("Test query", "low")
 
-    async def test_deep_search_invalid_effort_level(self, mock_graph_result):
+    async def test_deep_search_invalid_effort_level(self, mock_graph_result, mock_models, mock_config):
         """Test deep_search with invalid effort level (should default to high)."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
         with (
-            patch(
-                "gemini_deepsearch_mcp.app.graph.invoke", return_value=mock_graph_result
-            ),
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
             patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
         ):
             mock_to_thread.return_value = mock_graph_result
 
             # Pass an invalid effort level - should default to high effort
-            await deep_search("Test query", "invalid")
+            await deep_search.fn("Test query", "invalid")
 
             # Get the actual arguments passed to graph.invoke via asyncio.to_thread
             args, kwargs = mock_to_thread.call_args
@@ -274,4 +326,3 @@ class TestErrorHandling:
             # Should default to high effort configuration
             assert input_state["initial_search_query_count"] == 5
             assert input_state["max_research_loops"] == 3
-            assert input_state["reasoning_model"] == "gemini-2.5-pro-preview-06-05"

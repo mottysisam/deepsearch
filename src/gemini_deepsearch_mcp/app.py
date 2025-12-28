@@ -9,11 +9,28 @@ from langchain_core.messages import HumanMessage
 from pydantic import Field
 from starlette.routing import Mount
 
-from .agent.graph import graph
 from .config import load_config
 from .model_selection import resolve_models
 
 mcp = FastMCP("DeepSearch")
+
+# Lazy import of graph to avoid requiring GEMINI_API_KEY at import time
+_graph = None
+
+
+def _get_graph():
+    """Lazy load the LangGraph graph.
+
+    This allows tests to import app.py without requiring GEMINI_API_KEY.
+
+    Returns:
+        The compiled LangGraph graph.
+    """
+    global _graph
+    if _graph is None:
+        from .agent.graph import graph
+        _graph = graph
+    return _graph
 
 
 @mcp.tool()
@@ -110,6 +127,7 @@ async def deep_search(
     }
 
     # Run the agent graph to process the query in a separate thread to avoid blocking
+    graph = _get_graph()
     result = await asyncio.to_thread(graph.invoke, input_state, config)
 
     # Extract the final answer and sources from the result
