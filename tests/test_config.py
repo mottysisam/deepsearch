@@ -229,7 +229,7 @@ class TestModelRegistryContainsAllModels:
         for model_id, model in AVAILABLE_MODELS.items():
             assert model.id == model_id
             assert model.name, f"Model {model_id} missing name"
-            assert model.category in ["flash", "pro", "thinking"]
+            assert model.category in ["flash", "pro", "thinking", "agent"]
             assert model.description, f"Model {model_id} missing description"
 
     def test_grounding_support_correctly_set(self):

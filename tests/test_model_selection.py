@@ -436,3 +436,113 @@ class TestDeepSearchToolModelSelection:
             call_args = mock_graph.invoke.call_args
             config = call_args[0][1]
             assert config["configurable"]["answer_model"] == "gemini-2.5-pro"
+
+
+class TestDeepResearchPreset:
+    """Test cases for deep-research preset using Interactions API."""
+
+    def setup_method(self):
+        """Reset config before each test."""
+        reset_config()
+
+    def teardown_method(self):
+        """Reset config after each test."""
+        reset_config()
+
+    def test_deep_research_preset_returns_interactions_api_flag(self):
+        """Deep research preset should return use_interactions_api flag."""
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            models = resolve_models(
+                model="deep-research",
+                query_model=None,
+                search_model=None,
+                reflection_model=None,
+                answer_model=None,
+            )
+
+            assert models["use_interactions_api"] is True
+            assert models["agent_model"] == "deep-research-pro-preview-12-2025"
+
+    def test_deep_research_preset_does_not_include_standard_models(self):
+        """Deep research preset should not include standard model keys."""
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            models = resolve_models(
+                model="deep-research",
+                query_model=None,
+                search_model=None,
+                reflection_model=None,
+                answer_model=None,
+            )
+
+            # Should NOT have LangGraph model keys
+            assert "query_generator_model" not in models
+            assert "web_search_model" not in models
+            assert "reflection_model" not in models
+            assert "answer_model" not in models
+
+    def test_is_deep_research_mode_returns_true_for_deep_research(self):
+        """is_deep_research_mode should return True for deep-research preset."""
+        from gemini_deepsearch_mcp.model_selection import is_deep_research_mode
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            models = resolve_models(
+                model="deep-research",
+                query_model=None,
+                search_model=None,
+                reflection_model=None,
+                answer_model=None,
+            )
+
+            assert is_deep_research_mode(models) is True
+
+    def test_is_deep_research_mode_returns_false_for_standard_presets(self):
+        """is_deep_research_mode should return False for standard presets."""
+        from gemini_deepsearch_mcp.model_selection import is_deep_research_mode
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            for preset in ["flash", "pro", "thinking"]:
+                models = resolve_models(
+                    model=preset,
+                    query_model=None,
+                    search_model=None,
+                    reflection_model=None,
+                    answer_model=None,
+                )
+
+                assert is_deep_research_mode(models) is False
+
+    def test_is_deep_research_mode_returns_false_for_no_preset(self):
+        """is_deep_research_mode should return False when no preset specified."""
+        from gemini_deepsearch_mcp.model_selection import is_deep_research_mode
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            models = resolve_models(
+                model=None,
+                query_model=None,
+                search_model=None,
+                reflection_model=None,
+                answer_model=None,
+            )
+
+            assert is_deep_research_mode(models) is False
+
+    def test_deep_research_ignores_individual_model_overrides(self):
+        """Deep research preset should ignore individual model overrides.
+
+        When deep-research is selected, it uses the Interactions API which
+        handles everything internally, so individual model overrides don't apply.
+        """
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}):
+            models = resolve_models(
+                model="deep-research",
+                query_model="gemini-2.5-pro",  # Should be ignored
+                search_model="gemini-2.5-flash",  # Should be ignored
+                reflection_model="gemini-2.5-pro",  # Should be ignored
+                answer_model="gemini-2.5-pro",  # Should be ignored
+            )
+
+            # Should still return Interactions API config
+            assert models["use_interactions_api"] is True
+            assert models["agent_model"] == "deep-research-pro-preview-12-2025"
+            # Individual overrides should not be present
+            assert "query_generator_model" not in models
