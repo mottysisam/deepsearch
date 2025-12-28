@@ -10,7 +10,7 @@ from pydantic import Field
 from starlette.routing import Mount
 
 from .config import load_config
-from .model_selection import resolve_models
+from .model_selection import is_deep_research_mode, resolve_models
 
 mcp = FastMCP("DeepSearch")
 
@@ -33,6 +33,43 @@ def _get_graph():
     return _graph
 
 
+async def _run_deep_research_async(query: str) -> dict:
+    """Run research using Google's Deep Research Agent.
+
+    This uses the Interactions API instead of the LangGraph workflow.
+    Runs the blocking agent.research() call in a thread pool.
+
+    Args:
+        query: The research question.
+
+    Returns:
+        Dictionary with answer and sources.
+    """
+    from .deep_research_agent import DeepResearchAgent
+
+    try:
+        agent = DeepResearchAgent()
+        # Run the blocking research method in a thread pool
+        result = await asyncio.to_thread(agent.research, query)
+    except TimeoutError as e:
+        return {"error": str(e)}
+    except RuntimeError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        return {"error": f"Deep research failed: {str(e)}"}
+
+    return {
+        "answer": result.answer,
+        "sources": result.sources,
+        "metadata": {
+            "mode": "google-deep-research",
+            "agent_model": "deep-research-pro-preview-12-2025",
+            "interaction_id": result.interaction_id,
+            "elapsed_seconds": result.elapsed_seconds,
+        },
+    }
+
+
 @mcp.tool()
 async def deep_search(
     query: Annotated[str, Field(description="Search query string")],
@@ -42,9 +79,10 @@ async def deep_search(
                          "medium (3 queries, 2 loops), high (5 queries, 3 loops)")
     ] = "low",
     model: Annotated[
-        Literal["flash", "pro", "thinking"] | None,
+        Literal["flash", "pro", "thinking", "deep-research"] | None,
         Field(description="Model preset: flash (fast), pro (capable), "
-                         "thinking (extended reasoning). Overrides config defaults.")
+                         "thinking (extended reasoning), deep-research (Google's "
+                         "autonomous research agent). Overrides config defaults.")
     ] = None,
     query_model: Annotated[
         str | None,
@@ -90,6 +128,10 @@ async def deep_search(
         )
     except ValueError as e:
         return {"error": str(e)}
+
+    # Check if using Google's Deep Research Agent (Interactions API)
+    if is_deep_research_mode(models):
+        return await _run_deep_research_async(query)
 
     # Load config for effort-based settings
     app_config = load_config()

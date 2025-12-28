@@ -170,7 +170,12 @@ def show_status() -> int:
     print("Available Presets:")
     for name, preset in MODEL_PRESETS.items():
         print(f"  {name}:")
-        print(f"    answer_model: {preset['answer_model']}")
+        if "agent_model" in preset:
+            # Deep Research preset uses Interactions API
+            print(f"    agent_model: {preset['agent_model']}")
+            print(f"    (uses Google Deep Research Agent)")
+        else:
+            print(f"    answer_model: {preset['answer_model']}")
 
     return 0
 
