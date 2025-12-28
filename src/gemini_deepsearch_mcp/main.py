@@ -12,18 +12,57 @@ from fastmcp import FastMCP
 from langchain_core.messages import HumanMessage
 from pydantic import Field
 
-from .agent.graph import graph
 from .config import load_config
 from .logging import configure_logging, get_logger
 from .model_selection import resolve_models
 
-# Initialize logging and create logger
-_config = load_config()
-configure_logging(_config.log_level)
-logger = get_logger("deepsearch.main")
-
 # Create MCP server
 mcp = FastMCP("DeepSearch")
+
+# Lazy-loaded global state
+_graph = None
+_logger = None
+_logging_configured = False
+
+
+def _ensure_logging():
+    """Ensure logging is configured (lazy initialization).
+
+    This allows CLI commands like --status and --models to work
+    without requiring GEMINI_API_KEY.
+    """
+    global _logging_configured, _logger
+    if not _logging_configured:
+        try:
+            config = load_config()
+            configure_logging(config.log_level)
+        except Exception:
+            # If config fails, use default logging
+            configure_logging("INFO")
+        _logger = get_logger("deepsearch.main")
+        _logging_configured = True
+    return _logger
+
+
+def _get_logger():
+    """Get the logger, ensuring logging is configured first."""
+    return _ensure_logging()
+
+
+def _get_graph():
+    """Lazy load the LangGraph graph.
+
+    This allows CLI commands like --status and --models to work
+    without requiring GEMINI_API_KEY.
+
+    Returns:
+        The compiled LangGraph graph.
+    """
+    global _graph
+    if _graph is None:
+        from .agent.graph import graph
+        _graph = graph
+    return _graph
 
 
 @mcp.tool()
@@ -73,6 +112,7 @@ def deep_search(
         A dictionary containing the file path to a JSON file with the answer and sources.
     """
     start_time = time.time()
+    logger = _get_logger()
     log = logger.bind(
         query=query[:50] + "..." if len(query) > 50 else query,
         effort=effort,
@@ -144,6 +184,7 @@ def deep_search(
     # Run the agent graph to process the query
     try:
         log.info("agent_invocation_started")
+        graph = _get_graph()
         result = graph.invoke(input_state, config)
         log.info("agent_invocation_completed")
     except Exception as e:
@@ -179,9 +220,24 @@ def deep_search(
 
 
 def main():
-    """Main entry point for the MCP server."""
-    logger.info("mcp_server_starting", transport="stdio")
-    mcp.run(transport="stdio")
+    """Main entry point for the MCP server.
+
+    Handles CLI commands (--verify, --status, --models, --demo, --version)
+    or starts the MCP stdio server if no command is specified.
+    """
+    from .cli import run_cli
+
+    # Run CLI and check if a command was executed
+    exit_code = run_cli()
+
+    if exit_code == -1:
+        # No CLI command specified, start MCP server
+        logger = _get_logger()
+        logger.info("mcp_server_starting", transport="stdio")
+        mcp.run(transport="stdio")
+    else:
+        # CLI command was executed, exit with its return code
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
