@@ -14,7 +14,7 @@ class GeminiModel(BaseModel):
 
     id: str = Field(..., description="Model identifier for API calls")
     name: str = Field(..., description="Human-readable model name")
-    category: Literal["flash", "pro", "thinking"] = Field(
+    category: Literal["flash", "pro", "thinking", "agent"] = Field(
         ..., description="Model category"
     )
     description: str = Field(..., description="Model description")
@@ -94,6 +94,22 @@ AVAILABLE_MODELS: dict[str, GeminiModel] = {
         ],
         supports_grounding=False,
     ),
+    # Agent models - Use Interactions API
+    "deep-research-pro-preview-12-2025": GeminiModel(
+        id="deep-research-pro-preview-12-2025",
+        name="Gemini Deep Research Agent",
+        category="agent",
+        description="Autonomous research agent that plans, searches, and synthesizes reports",
+        capabilities=[
+            "autonomous-research",
+            "web-search",
+            "url-context",
+            "multi-step-reasoning",
+            "report-generation",
+            "citation-support",
+        ],
+        supports_grounding=True,  # Has built-in Google Search
+    ),
 }
 
 
@@ -117,7 +133,17 @@ MODEL_PRESETS: dict[str, dict[str, str]] = {
         "reflection_model": "gemini-2.5-flash-thinking",
         "answer_model": "gemini-2.5-pro",
     },
+    # Special preset that uses Google's Deep Research Agent (Interactions API)
+    # When this preset is selected, the system uses Google's autonomous research agent
+    # instead of the custom LangGraph workflow
+    "deep-research": {
+        "agent_model": "deep-research-pro-preview-12-2025",
+        "use_interactions_api": "true",  # Flag to indicate Interactions API
+    },
 }
+
+# Presets that use the Interactions API instead of LangGraph
+INTERACTIONS_API_PRESETS = {"deep-research"}
 
 
 def get_model(model_id: str) -> GeminiModel | None:
@@ -169,3 +195,30 @@ def is_valid_model(model_id: str) -> bool:
         True if model exists in registry.
     """
     return model_id in AVAILABLE_MODELS
+
+
+def uses_interactions_api(preset_name: str) -> bool:
+    """Check if a preset uses the Interactions API.
+
+    Args:
+        preset_name: The preset name to check.
+
+    Returns:
+        True if preset uses Google's Interactions API (e.g., deep-research).
+    """
+    return preset_name in INTERACTIONS_API_PRESETS
+
+
+def get_interactions_api_model(preset_name: str) -> str | None:
+    """Get the Interactions API model for a preset.
+
+    Args:
+        preset_name: The preset name.
+
+    Returns:
+        The agent model ID if preset uses Interactions API, None otherwise.
+    """
+    if preset_name in INTERACTIONS_API_PRESETS:
+        preset = MODEL_PRESETS.get(preset_name, {})
+        return preset.get("agent_model")
+    return None
