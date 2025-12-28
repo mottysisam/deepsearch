@@ -326,3 +326,145 @@ class TestErrorHandling:
             # Should default to high effort configuration
             assert input_state["initial_search_query_count"] == 5
             assert input_state["max_research_loops"] == 3
+
+
+class TestDeepResearchMode:
+    """Test cases for Google Deep Research Agent integration."""
+
+    @pytest.fixture
+    def mock_deep_research_result(self):
+        """Mock result from DeepResearchAgent.research()."""
+        # Create a simple mock object with the expected attributes
+        mock_result = MagicMock()
+        mock_result.answer = "This is a comprehensive research report about AI."
+        mock_result.sources = [
+            {"url": "https://example.com/ai", "title": "AI Overview"},
+            {"url": "https://example.com/ml", "title": "Machine Learning Guide"},
+        ]
+        mock_result.interaction_id = "test-interaction-123"
+        mock_result.status = "completed"
+        mock_result.elapsed_seconds = 120.5
+        return mock_result
+
+    @pytest.fixture
+    def mock_deep_research_models(self):
+        """Mock models configuration for deep-research mode."""
+        return {
+            "use_interactions_api": True,
+            "agent_model": "deep-research-pro-preview-12-2025",
+        }
+
+    async def test_deep_search_deep_research_mode(
+        self, mock_deep_research_result, mock_deep_research_models
+    ):
+        """Test deep_search with deep-research model preset."""
+        with (
+            patch(
+                "gemini_deepsearch_mcp.app.resolve_models",
+                return_value=mock_deep_research_models,
+            ),
+            patch(
+                "gemini_deepsearch_mcp.app.is_deep_research_mode",
+                return_value=True,
+            ),
+            patch(
+                "gemini_deepsearch_mcp.app._run_deep_research_async"
+            ) as mock_run_deep_research,
+        ):
+            mock_run_deep_research.return_value = {
+                "answer": mock_deep_research_result.answer,
+                "sources": mock_deep_research_result.sources,
+                "metadata": {
+                    "mode": "google-deep-research",
+                    "agent_model": "deep-research-pro-preview-12-2025",
+                    "interaction_id": mock_deep_research_result.interaction_id,
+                    "elapsed_seconds": mock_deep_research_result.elapsed_seconds,
+                },
+            }
+
+            result = await deep_search.fn("What is AI?", "low", model="deep-research")
+
+            # Verify result structure
+            assert "answer" in result
+            assert "sources" in result
+            assert "metadata" in result
+            assert result["answer"] == "This is a comprehensive research report about AI."
+            assert len(result["sources"]) == 2
+            assert result["metadata"]["mode"] == "google-deep-research"
+            assert result["metadata"]["interaction_id"] == "test-interaction-123"
+
+            # Verify _run_deep_research_async was called
+            mock_run_deep_research.assert_called_once_with("What is AI?")
+
+    async def test_deep_search_deep_research_timeout_error(self, mock_deep_research_models):
+        """Test deep_search when Deep Research times out."""
+        with (
+            patch(
+                "gemini_deepsearch_mcp.app.resolve_models",
+                return_value=mock_deep_research_models,
+            ),
+            patch(
+                "gemini_deepsearch_mcp.app.is_deep_research_mode",
+                return_value=True,
+            ),
+            patch(
+                "gemini_deepsearch_mcp.app._run_deep_research_async"
+            ) as mock_run_deep_research,
+        ):
+            mock_run_deep_research.return_value = {
+                "error": "Research exceeded maximum time of 3600 seconds."
+            }
+
+            result = await deep_search.fn("Complex research query", model="deep-research")
+
+            assert "error" in result
+            assert "exceeded maximum time" in result["error"]
+
+    async def test_deep_search_deep_research_runtime_error(self, mock_deep_research_models):
+        """Test deep_search when Deep Research fails."""
+        with (
+            patch(
+                "gemini_deepsearch_mcp.app.resolve_models",
+                return_value=mock_deep_research_models,
+            ),
+            patch(
+                "gemini_deepsearch_mcp.app.is_deep_research_mode",
+                return_value=True,
+            ),
+            patch(
+                "gemini_deepsearch_mcp.app._run_deep_research_async"
+            ) as mock_run_deep_research,
+        ):
+            mock_run_deep_research.return_value = {"error": "Research failed: API error"}
+
+            result = await deep_search.fn("Test query", model="deep-research")
+
+            assert "error" in result
+            assert "Research failed" in result["error"]
+
+    async def test_deep_search_uses_langgraph_for_non_deep_research(
+        self, mock_graph_result, mock_models, mock_config
+    ):
+        """Test that non-deep-research presets still use LangGraph workflow."""
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = mock_graph_result
+
+        with (
+            patch("gemini_deepsearch_mcp.app._get_graph", return_value=mock_graph),
+            patch("gemini_deepsearch_mcp.app.asyncio.to_thread") as mock_to_thread,
+            patch("gemini_deepsearch_mcp.app.resolve_models", return_value=mock_models),
+            patch("gemini_deepsearch_mcp.app.is_deep_research_mode", return_value=False),
+            patch("gemini_deepsearch_mcp.app.load_config", return_value=mock_config),
+        ):
+            mock_to_thread.return_value = mock_graph_result
+
+            result = await deep_search.fn("Test query", "low", model="pro")
+
+            # Verify result comes from LangGraph (has answer and sources, no metadata)
+            assert "answer" in result
+            assert "sources" in result
+            # LangGraph path doesn't add metadata
+            assert "metadata" not in result
+
+            # Verify asyncio.to_thread was called (LangGraph path)
+            mock_to_thread.assert_called_once()

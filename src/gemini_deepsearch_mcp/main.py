@@ -14,7 +14,7 @@ from pydantic import Field
 
 from .config import load_config
 from .logging import configure_logging, get_logger
-from .model_selection import resolve_models
+from .model_selection import is_deep_research_mode, resolve_models
 from .response_models import SearchResult
 
 # Create MCP server
@@ -66,6 +66,86 @@ def _get_graph():
     return _graph
 
 
+def _run_deep_research(query: str, log) -> dict:
+    """Run research using Google's Deep Research Agent.
+
+    This uses the Interactions API instead of the LangGraph workflow.
+
+    Args:
+        query: The research question.
+        log: Bound logger for structured logging.
+
+    Returns:
+        Dictionary with file_path to the results JSON file.
+    """
+    from .deep_research_agent import DeepResearchAgent
+
+    start_time = time.time()
+
+    try:
+        log.info("deep_research_agent_starting")
+        agent = DeepResearchAgent()
+        result = agent.research(query)
+        log.info(
+            "deep_research_agent_completed",
+            elapsed_seconds=result.elapsed_seconds,
+            interaction_id=result.interaction_id,
+        )
+    except TimeoutError as e:
+        log.error("deep_research_agent_timeout", error=str(e))
+        return {"error": str(e)}
+    except RuntimeError as e:
+        log.error("deep_research_agent_failed", error=str(e))
+        return {"error": str(e)}
+    except Exception as e:
+        log.exception("deep_research_agent_error", error=str(e))
+        return {"error": f"Deep research failed: {str(e)}"}
+
+    duration = time.time() - start_time
+
+    # Create structured SearchResult with metadata
+    # Use special models_used structure for Deep Research
+    models_used = {
+        "agent_model": "deep-research-pro-preview-12-2025",
+        "mode": "google-deep-research",
+    }
+
+    search_result = SearchResult.create(
+        answer=result.answer,
+        sources=result.sources,
+        query=query,
+        effort="high",  # Deep research is always high effort
+        models_used=models_used,
+        research_loops=0,  # Agent manages its own loops
+        duration_seconds=duration,
+    )
+
+    # Create filename from first few characters of query
+    sanitized_query = re.sub(r'[^\w\s-]', '', query)[:20]
+    filename = re.sub(r'\s+', '_', sanitized_query.strip()) + '.json'
+    file_path = os.path.join(tempfile.gettempdir(), filename)
+
+    # Write answer, sources, and metadata to JSON file
+    result_data = search_result.to_file_format()
+
+    # Add interaction_id for debugging/resumption
+    result_data["metadata"]["interaction_id"] = result.interaction_id
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(result_data, f, ensure_ascii=False, indent=2)
+
+    log.info(
+        "deep_research_completed",
+        duration_seconds=round(duration, 2),
+        sources_count=len(result.sources),
+        answer_length=len(result.answer),
+        output_file=file_path,
+        interaction_id=result.interaction_id,
+    )
+
+    return {"file_path": file_path}
+
+
 @mcp.tool()
 def deep_search(
     query: Annotated[str, Field(description="Search query string")],
@@ -75,9 +155,10 @@ def deep_search(
                          "medium (3 queries, 2 loops), high (5 queries, 3 loops)")
     ] = "low",
     model: Annotated[
-        Literal["flash", "pro", "thinking"] | None,
+        Literal["flash", "pro", "thinking", "deep-research"] | None,
         Field(description="Model preset: flash (fast), pro (capable), "
-                         "thinking (extended reasoning). Overrides config defaults.")
+                         "thinking (extended reasoning), deep-research (Google's "
+                         "autonomous research agent). Overrides config defaults.")
     ] = None,
     query_model: Annotated[
         str | None,
@@ -130,16 +211,25 @@ def deep_search(
             reflection_model=reflection_model,
             answer_model=answer_model,
         )
-        log.debug(
-            "models_resolved",
-            query_model=models["query_generator_model"],
-            search_model=models["web_search_model"],
-            reflection_model=models["reflection_model"],
-            answer_model=models["answer_model"],
-        )
     except ValueError as e:
         log.error("model_resolution_failed", error=str(e))
         return {"error": str(e)}
+
+    # Check if using Google's Deep Research Agent (Interactions API)
+    if is_deep_research_mode(models):
+        log.info(
+            "using_deep_research_agent",
+            agent_model=models.get("agent_model"),
+        )
+        return _run_deep_research(query, log)
+
+    log.debug(
+        "models_resolved",
+        query_model=models["query_generator_model"],
+        search_model=models["web_search_model"],
+        reflection_model=models["reflection_model"],
+        answer_model=models["answer_model"],
+    )
 
     # Load config for effort-based settings
     app_config = load_config()
