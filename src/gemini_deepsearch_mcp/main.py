@@ -15,6 +15,7 @@ from pydantic import Field
 from .config import load_config
 from .logging import configure_logging, get_logger
 from .model_selection import resolve_models
+from .response_models import SearchResult
 
 # Create MCP server
 mcp = FastMCP("DeepSearch")
@@ -196,18 +197,29 @@ def deep_search(
         result["messages"][-1].content if result["messages"] else "No answer generated."
     )
     sources = result["sources_gathered"]
+    duration = time.time() - start_time
+
+    # Create structured SearchResult with metadata
+    search_result = SearchResult.create(
+        answer=answer,
+        sources=sources,
+        query=query,
+        effort=effort,
+        models_used=models,
+        research_loops=max_research_loops,
+        duration_seconds=duration,
+    )
 
     # Create filename from first few characters of query (spaces replaced with underscores)
     sanitized_query = re.sub(r'[^\w\s-]', '', query)[:20]
     filename = re.sub(r'\s+', '_', sanitized_query.strip()) + '.json'
     file_path = os.path.join(tempfile.gettempdir(), filename)
 
-    # Write answer and sources to JSON file
-    result_data = {"answer": answer, "sources": sources}
+    # Write answer, sources, and metadata to JSON file
+    result_data = search_result.to_file_format()
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(result_data, f, ensure_ascii=False, indent=2)
 
-    duration = time.time() - start_time
     log.info(
         "deep_search_completed",
         duration_seconds=round(duration, 2),
